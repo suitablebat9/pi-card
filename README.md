@@ -39,11 +39,11 @@ To save Wi-Fi for a physical Pi running Raspberry Pi OS with NetworkManager, run
 
 ## SSH into the emulated Pi
 
-Start with `pi-card --ssh` for access from this Mac, or `pi-card --ssh-lan` for access from this Mac and other devices on your trusted network. LAN mode listens on every Mac IPv4 interface. Plain `pi-card` leaves inbound SSH forwarding off. Restart the emulator to change modes.
+Run `pi-card`. After you confirm the card, the launcher creates the Raspberry Pi OS SSH boot marker and forwards port 22 on the Mac’s IPv4 interfaces to the Pi. Sign in with your Pi username and its configured password or key. Standard Raspberry Pi OS includes the SSH server; a custom image needs OpenSSH Server installed.
 
-In the Pi console, run `sudo systemctl enable --now ssh` once to start SSH and enable it for future boots of that card. If the unit is missing, install it with `sudo apt install openssh-server` and retry. Use the Pi account and its configured password or SSH key.
+From the same Mac, open a second Terminal and run `ssh USER@127.0.0.1`. From another device on the same network, use `ssh USER@MAC_IP` with the Mac’s Wi-Fi IPv4 address, or `ssh USER@MAC_NAME.local` on a network with Bonjour. Find the Mac’s hostname with `scutil --get LocalHostName` and append `.local`. Keep the emulator running. The card also retains SSH access when you move it to a physical Pi.
 
-From a second Terminal on the Mac, run `ssh -p 2222 USER@127.0.0.1`. From another device, replace `127.0.0.1` with the Mac’s Wi-Fi IPv4 address (System Settings → Wi-Fi → Details → TCP/IP). Replace `USER` with the Pi username. Keep the emulator running. If a LAN connection times out, check that the devices can reach one another and that the Mac firewall permits QEMU’s incoming connection.
+If another service such as macOS Remote Login already owns port 22, the launcher reports the conflict before touching the card. The existing `pi-card --ssh-lan` and `pi-card --ssh` options still use port 2222 for network and local-only access respectively. Use `pi-card --offline` for a session without networking. If a LAN connection times out, check that both devices can reach each other and that the Mac firewall permits QEMU’s incoming connections.
 
 ## Compatible cards
 

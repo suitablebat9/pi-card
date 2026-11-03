@@ -114,15 +114,18 @@ def main():
         if not shutil.which(tool):
             raise ValueError("Install dependencies with: brew install qemu dtc")
     netdev = "user,id=net0"
-    if opt.ssh or opt.ssh_lan:
-        address = "0.0.0.0" if opt.ssh_lan else "127.0.0.1"
+    if not opt.offline:
+        # Keep the explicit SSH modes compatible with existing clients on port 2222.
+        port = 2222 if opt.ssh or opt.ssh_lan else 22
+        address = "127.0.0.1" if opt.ssh else "0.0.0.0"
         with socket.socket() as probe:
             try:
-                probe.bind((address, 2222))
+                probe.bind((address, port))
             except OSError as error:
-                raise ValueError(f"Cannot listen on {address}:2222: {error.strerror}. Check for another SSH forward.") from error
-        netdev += f",hostfwd=tcp:{address}:2222-:22"
-        print(f"SSH forwarding: {address}:2222 → port 22 on the Pi.")
+                hint = " Use --ssh-lan for port 2222 if macOS Remote Login uses port 22." if port == 22 else ""
+                raise ValueError(f"Cannot listen on {address}:{port}: {error.strerror}.{hint}") from error
+        netdev += f",hostfwd=tcp:{address}:{port}-:22"
+        print(f"SSH forwarding: {address}:{port} → port 22 on the Pi.")
     with tempfile.TemporaryDirectory(prefix="pi-card-") as tmp:
         cmd = prepare(boot, Path(tmp), opt.bits)
         device = "/dev/" + name
@@ -133,6 +136,13 @@ def main():
         if not any((c[0], c[1]["TotalSize"], c[2], c[3], c[4]) ==
                    (name, info["TotalSize"], boot, uuid, linux) for c in cards()):
             raise ValueError("Card identity or mount state changed. Run pi-card again.")
+        if not opt.offline:
+            # Raspberry Pi OS consumes this boot marker when enabling its SSH service.
+            try:
+                (boot / "ssh").open("xb").close()
+            except FileExistsError:
+                if not (boot / "ssh").is_file():
+                    raise ValueError("The SSH boot marker exists but is not a regular file.")
         subprocess.run(["diskutil", "unmountDisk", device], check=True)
         fresh = diskutil("info", "-plist", name + "s1")
         if fresh.get("ParentWholeDisk") != name or fresh.get("MountPoint") or (
