@@ -127,7 +127,8 @@ def main():
         cmd += ["-drive", f"if=none,id=card,file={device},format=raw", "-device", "usb-storage,drive=card"]
         if not opt.offline:
             cmd += ["-netdev", "user,id=net0", "-device", "usb-net,netdev=net0"]
-        cmd += ["-display", "none", "-serial", "stdio", "-no-reboot"]
+        cmd += ["-display", "none", "-chardev", "stdio,id=console,signal=off",
+                "-serial", "chardev:console", "-no-reboot"]
         print("Inside the Pi, use sudo poweroff before removing the card.", flush=True)
         return subprocess.run(["sudo", shutil.which("qemu-system-aarch64"), *cmd]).returncode
 

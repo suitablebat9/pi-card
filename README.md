@@ -27,7 +27,7 @@ Check the displayed disk, capacity, and volume before confirming. Enter your Mac
 * `pi-card --offline` boots without networking.
 * `pi-card --bits 32` or `pi-card --bits 64` selects a kernel when both are present.
 
-Inside the Pi, `findmnt -no SOURCE,FSTYPE,OPTIONS /` should report `/dev/sda2`, `ext4`, and `rw`. To finish, run `sudo poweroff` in the Pi. Wait for power-off and the Mac prompt before ejecting the verified disk with `diskutil eject /dev/diskN`. Reinsert to start another session. A guest reboot ends the QEMU session.
+Inside the Pi, `findmnt -no SOURCE,FSTYPE,OPTIONS /` should report `/dev/sda2`, `ext4`, and `rw`. Ctrl-C interrupts the foreground command inside the guest. To finish, run `sudo poweroff` in the Pi. Wait for power-off and the Mac prompt before ejecting the verified disk with `diskutil eject /dev/diskN`. Reinsert to start another session. A guest reboot ends the QEMU session.
 
 ## Wi-Fi and internet
 
