@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""Boot Raspberry Pi OS on a removable card with QEMU on macOS."""
+import argparse
+import gzip
+import os
+from pathlib import Path
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def run(*args):
+    return subprocess.check_output(args, text=True).strip()
+
+
+def diskutil(*args):
+    return plistlib.loads(subprocess.check_output(["diskutil", *args]))
+
+
+def cards():
+    result = []
+    for disk in diskutil("list", "-plist", "physical")["AllDisksAndPartitions"]:
+        name = disk["DeviceIdentifier"]
+        info = diskutil("info", "-plist", name)
+        if not (info.get("WholeDisk") and info.get("RemovableMedia")
+                and info.get("Writable") and info.get("VirtualOrPhysical") == "Physical"):
+            continue
+        parts = disk.get("Partitions", [])
+        if len(parts) != 2 or parts[1].get("Content") != "Linux":
+            continue
+        boot = diskutil("info", "-plist", parts[0]["DeviceIdentifier"])
+        if boot.get("FilesystemType") != "msdos" or not boot.get("MountPoint"):
+            continue
+        path = Path(boot["MountPoint"])
+        if (path / "cmdline.txt").is_file() and (path / "bcm2710-rpi-3-b.dtb").is_file():
+            result.append((name, info, path, boot.get("VolumeUUID"), parts[1]["DeviceIdentifier"]))
+    return result
+
+
+def prepare(boot, folder, bits):
+    if bits is None:
+        found = [b for b, k in [(64, "kernel8.img"), (32, "kernel7.img")] if (boot / k).is_file()]
+        if len(found) != 1:
+            raise ValueError("Cannot select a kernel automatically. For a dual-kernel card, choose --bits 32 or --bits 64 to match the installed OS.")
+        bits = found[0]
+    suffix = "8" if bits == 64 else "7"
+    kernel = boot / ("kernel" + suffix + ".img")
+    dtb = folder / "pi3.dtb"
+    shutil.copyfile(boot / "bcm2710-rpi-3-b.dtb", dtb)
+    uart = run("fdtget", dtb, "/aliases", "uart0")
+    aliases = run("fdtget", "-p", dtb, "/aliases").splitlines()
+    serial = next((a[6:] for a in aliases if re.fullmatch(r"serial[0-9]+", a)
+                   and run("fdtget", dtb, "/aliases", a) == uart), "0")
+    subprocess.run(["fdtput", "-t", "s", dtb, uart, "status", "okay"], check=True)
+    if "bluetooth" in run("fdtget", "-l", dtb, uart).splitlines():
+        subprocess.run(["fdtput", "-t", "s", dtb, uart + "/bluetooth", "status", "disabled"], check=True)
+    for node in run("fdtget", "-l", dtb, "/soc").splitlines():
+        if node.startswith("watchdog@"):
+            subprocess.run(["fdtput", "-t", "s", dtb, "/soc/" + node, "status", "disabled"], check=True)
+    with kernel.open("rb") as src, (folder / "kernel").open("wb") as dst:
+        magic = src.read(2)
+        src.seek(0)
+        if magic == bytes.fromhex("1f8b"):
+            with gzip.GzipFile(fileobj=src) as stream:
+                shutil.copyfileobj(stream, dst)
+        else:
+            shutil.copyfileobj(src, dst)
+    args = (boot / "cmdline.txt").read_text().split()
+    if not any(a.startswith("root=") for a in args):
+        raise ValueError("The card has no standard root= boot setting.")
+    args = [a for a in args if a not in ("resize", "quiet", "splash")
+            and not a.startswith(("console=", "root=", "watchdog_disarm="))]
+    args += ["root=/dev/sda2", "console=ttyAMA" + serial + ",115200", "watchdog_disarm=0"]
+    command = ["-machine", "raspi3b", "-kernel", str(folder / "kernel"), "-dtb", str(dtb)]
+    initrd = boot / ("initramfs" + suffix)
+    if initrd.is_file():
+        shutil.copyfile(initrd, folder / "initrd")
+        command += ["-initrd", str(folder / "initrd")]
+    return command + ["-append", " ".join(args)]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("disk", nargs="?", help="whole removable disk, e.g. disk4")
+    parser.add_argument("--list", action="store_true", help="list eligible mounted cards and exit")
+    parser.add_argument("--offline", action="store_true", help="disable the virtual Ethernet adapter")
+    parser.add_argument("--bits", choices=(32, 64), type=int, help="select the card's kernel")
+    opt = parser.parse_args()
+    if sys.platform != "darwin":
+        raise ValueError("This launcher requires macOS.")
+    candidates = cards()
+    for name, info, boot, _, _ in candidates:
+        print(f"{name}   {info['TotalSize']/1e9:.1f} GB   {boot}")
+    if opt.list:
+        if not candidates:
+            print("No eligible mounted cards found. Cards in use by a VM are normally unmounted.")
+        return 0
+    if opt.disk:
+        candidates = [c for c in candidates if opt.disk in (c[0], "/dev/" + c[0])]
+    if len(candidates) != 1:
+        raise ValueError("Insert a compatible card with its boot volume mounted. If several are listed, run pi-card diskN. Shut down any existing card VM before reinserting.")
+    name, info, boot, uuid, linux = candidates[0]
+    if linux != name + "s2" or not uuid:
+        raise ValueError("Expected a FAT boot volume with a UUID and Linux on partition 2.")
+    for tool in ("fdtget", "fdtput", "qemu-system-aarch64"):
+        if not shutil.which(tool):
+            raise ValueError("Install dependencies with: brew install qemu dtc")
+    with tempfile.TemporaryDirectory(prefix="pi-card-") as tmp:
+        cmd = prepare(boot, Path(tmp), opt.bits)
+        device = "/dev/" + name
+        print(f"Changes made in the guest will be written directly to {device}.")
+        if input("Boot this card? [y/N] ").strip().lower() not in ("y", "yes"):
+            return 0
+        subprocess.run(["sudo", "-v"], check=True)
+        if not any((c[0], c[1]["TotalSize"], c[2], c[3], c[4]) ==
+                   (name, info["TotalSize"], boot, uuid, linux) for c in cards()):
+            raise ValueError("Card identity or mount state changed. Run pi-card again.")
+        subprocess.run(["diskutil", "unmountDisk", device], check=True)
+        fresh = diskutil("info", "-plist", name + "s1")
+        if fresh.get("ParentWholeDisk") != name or fresh.get("MountPoint") or (
+                fresh.get("VolumeUUID") and fresh["VolumeUUID"] != uuid
+        ):
+            raise ValueError("Could not confirm the unmounted boot partition. Reinsert the card.")
+        cmd += ["-drive", f"if=none,id=card,file={device},format=raw", "-device", "usb-storage,drive=card"]
+        if not opt.offline:
+            cmd += ["-netdev", "user,id=net0", "-device", "usb-net,netdev=net0"]
+        cmd += ["-display", "none", "-serial", "stdio", "-no-reboot"]
+        print("Inside the Pi, use sudo poweroff before removing the card.", flush=True)
+        return subprocess.run(["sudo", shutil.which("qemu-system-aarch64"), *cmd]).returncode
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, EOFError, subprocess.CalledProcessError) as error:
+        sys.exit(f"pi-card: {error}")
+    except KeyboardInterrupt:
+        sys.exit(130)
