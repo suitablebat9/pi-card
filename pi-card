@@ -57,9 +57,6 @@ def prepare(boot, folder, bits):
     subprocess.run(["fdtput", "-t", "s", dtb, uart, "status", "okay"], check=True)
     if "bluetooth" in run("fdtget", "-l", dtb, uart).splitlines():
         subprocess.run(["fdtput", "-t", "s", dtb, uart + "/bluetooth", "status", "disabled"], check=True)
-    for node in run("fdtget", "-l", dtb, "/soc").splitlines():
-        if node.startswith("watchdog@"):
-            subprocess.run(["fdtput", "-t", "s", dtb, "/soc/" + node, "status", "disabled"], check=True)
     with kernel.open("rb") as src, (folder / "kernel").open("wb") as dst:
         magic = src.read(2)
         src.seek(0)
@@ -72,8 +69,12 @@ def prepare(boot, folder, bits):
     if not any(a.startswith("root=") for a in args):
         raise ValueError("The card has no standard root= boot setting.")
     args = [a for a in args if a not in ("resize", "quiet", "splash")
-            and not a.startswith(("console=", "root=", "watchdog_disarm="))]
-    args += ["root=/dev/sda2", "console=ttyAMA" + serial + ",115200", "watchdog_disarm=0"]
+            and not a.startswith(("console=", "root=", "watchdog_disarm=", "systemd.watchdog_sec=",
+                                  "systemd.watchdog_device="))]
+    # The BCM watchdog also implements poweroff. Keep its kernel driver available
+    # while preventing initramfs and systemd from arming the emulated timer.
+    args += ["root=/dev/sda2", "console=ttyAMA" + serial + ",115200", "watchdog_disarm=0",
+             "systemd.watchdog_sec=off", "systemd.watchdog_device=/dev/pi-card-no-watchdog"]
     command = ["-machine", "raspi3b", "-kernel", str(folder / "kernel"), "-dtb", str(dtb)]
     initrd = boot / ("initramfs" + suffix)
     if initrd.is_file():
