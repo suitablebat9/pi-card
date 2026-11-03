@@ -37,6 +37,14 @@ To save Wi-Fi for a physical Pi running Raspberry Pi OS with NetworkManager, run
 
 [QEMU networking](https://www.qemu.org/docs/master/system/devices/net.html) · [Raspberry Pi network configuration](https://www.raspberrypi.com/documentation/computers/configuration.html)
 
+## SSH into the emulated Pi
+
+Start with `pi-card --ssh` for access from this Mac, or `pi-card --ssh-lan` for access from this Mac and other devices on your trusted network. LAN mode listens on every Mac IPv4 interface. Plain `pi-card` leaves inbound SSH forwarding off. Restart the emulator to change modes.
+
+In the Pi console, run `sudo systemctl enable --now ssh` once to start SSH and enable it for future boots of that card. If the unit is missing, install it with `sudo apt install openssh-server` and retry. Use the Pi account and its configured password or SSH key.
+
+From a second Terminal on the Mac, run `ssh -p 2222 USER@127.0.0.1`. From another device, replace `127.0.0.1` with the Mac’s Wi-Fi IPv4 address (System Settings → Wi-Fi → Details → TCP/IP). Replace `USER` with the Pi username. Keep the emulator running. If a LAN connection times out, check that the devices can reach one another and that the Mac firewall permits QEMU’s incoming connection.
+
 ## Compatible cards
 
 Designed for the standard two-partition Raspberry Pi OS layout: FAT boot partition followed by a Linux root partition. Requires a Pi 3B device tree, cmdline.txt, and kernel8.img (64-bit) or kernel7.img (32-bit). The launcher refreshes these from the selected card, recognizes compressed kernels, and loads the matching initramfs8 or initramfs7 when present. A Pi 4 or Pi 5 card can work if the installed OS also supports a Pi 3B. The 64-bit console and watchdog settings were developed against Raspberry Pi OS Lite based on Debian 13 on an Apple silicon Mac. The 32-bit path and other releases may need additional testing.

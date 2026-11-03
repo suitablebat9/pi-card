@@ -7,6 +7,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("disk", nargs="?", help="whole removable disk, e.g. disk4")
     parser.add_argument("--list", action="store_true", help="list eligible mounted cards and exit")
-    parser.add_argument("--offline", action="store_true", help="disable the virtual Ethernet adapter")
+    network = parser.add_mutually_exclusive_group()
+    network.add_argument("--ssh", action="store_true", help="forward SSH on localhost port 2222")
+    network.add_argument("--ssh-lan", action="store_true", help="forward SSH on port 2222 on all Mac IPv4 interfaces")
+    network.add_argument("--offline", action="store_true", help="disable the virtual Ethernet adapter")
     parser.add_argument("--bits", choices=(32, 64), type=int, help="select the card's kernel")
     opt = parser.parse_args()
     if sys.platform != "darwin":
@@ -109,6 +113,16 @@ def main():
     for tool in ("fdtget", "fdtput", "qemu-system-aarch64"):
         if not shutil.which(tool):
             raise ValueError("Install dependencies with: brew install qemu dtc")
+    netdev = "user,id=net0"
+    if opt.ssh or opt.ssh_lan:
+        address = "0.0.0.0" if opt.ssh_lan else "127.0.0.1"
+        with socket.socket() as probe:
+            try:
+                probe.bind((address, 2222))
+            except OSError as error:
+                raise ValueError(f"Cannot listen on {address}:2222: {error.strerror}. Check for another SSH forward.") from error
+        netdev += f",hostfwd=tcp:{address}:2222-:22"
+        print(f"SSH forwarding: {address}:2222 → port 22 on the Pi.")
     with tempfile.TemporaryDirectory(prefix="pi-card-") as tmp:
         cmd = prepare(boot, Path(tmp), opt.bits)
         device = "/dev/" + name
@@ -127,7 +141,7 @@ def main():
             raise ValueError("Could not confirm the unmounted boot partition. Reinsert the card.")
         cmd += ["-drive", f"if=none,id=card,file={device},format=raw", "-device", "usb-storage,drive=card"]
         if not opt.offline:
-            cmd += ["-netdev", "user,id=net0", "-device", "usb-net,netdev=net0"]
+            cmd += ["-netdev", netdev, "-device", "usb-net,netdev=net0"]
         cmd += ["-display", "none", "-chardev", "stdio,id=console,signal=off",
                 "-serial", "chardev:console", "-no-reboot"]
         print("Inside the Pi, use sudo poweroff before removing the card.", flush=True)
